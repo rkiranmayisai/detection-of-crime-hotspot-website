@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,87 +9,125 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <!-- Custom Styles -->
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
-
 <body>
     <div class="app-container">
         <!-- Minimalistic Header -->
         <header class="glass-header">
             <div>
-                <h1>Crime Hotspots</h1>
-                <p>Crowdsourced Safety Insights</p>
+                <h1>Telangana Crime Viewer</h1>
+                <p>Regional Historical Data & Analytics</p>
             </div>
             <div class="header-badges">
-                <span class="badge live-badge"><span class="dot"></span> Live Updates</span>
+                <span class="badge live-badge"><span class="dot"></span> System Active</span>
             </div>
         </header>
 
         <main class="main-content">
             <div id="map-container">
                 <div id="map"></div>
+                
+                <!-- Floating Action Panel -->
+                <div class="action-panel glass-panel">
+                    <div class="panel-tabs">
+                        <button id="tab-history" class="tab-btn active">Area History</button>
+                        <button id="tab-report" class="tab-btn">Report Incident</button>
+                    </div>
 
-                <!-- Floating Submission Panel -->
-                <div class="report-panel glass-panel">
-                    <h2>Report an Incident</h2>
-                    <p class="subtitle">Click anywhere on the map to mark a location.</p>
-                    <form id="report-form">
-                        <div class="form-group">
-                            <label for="crime-type">Type of Incident</label>
-                            <select id="crime-type" required>
-                                <option value="" disabled selected>Select an option</option>
-                                <option value="Theft">Theft</option>
-                                <option value="Assault">Assault</option>
-                                <option value="Vandalism">Vandalism</option>
-                                <option value="Suspicious Activity">Suspicious Activity</option>
-                                <option value="Other">Other</option>
-                            </select>
+                    <!-- History View -->
+                    <div id="view-history" class="panel-view">
+                        <h2>Location Analysis</h2>
+                        <p class="subtitle">Click anywhere on the map to scan a 500m radius for historical crimes.</p>
+                        
+                        <div class="scan-status" id="scan-status">
+                            Waiting for selection...
                         </div>
-
-                        <div class="form-group">
-                            <label for="description">Description <span class="optional">(Optional)</span></label>
-                            <textarea id="description" rows="3" placeholder="Provide extra details..."></textarea>
+                        
+                        <div id="incidents-list" class="incidents-list">
+                            <!-- Injected by JS -->
                         </div>
+                    </div>
 
-                        <div class="coordinates">
-                            <div class="coord-box">
-                                <span class="coord-label">Latitude</span>
-                                <span id="lat-display" class="coord-val">--</span>
+                    <!-- Report View -->
+                    <div id="view-report" class="panel-view hidden">
+                        <h2>Report an Incident</h2>
+                        <p class="subtitle">Click anywhere to set the location.</p>
+                        <form id="report-form">
+                            <div class="form-group">
+                                <label for="crime-type">Type of Incident</label>
+                                <select id="crime-type" required>
+                                    <option value="" disabled selected>Select an option</option>
+                                    <option value="MURDER">Murder</option>
+                                    <option value="RAPE">Rape</option>
+                                    <option value="KIDNAPPING">Kidnapping</option>
+                                    <option value="ROBBERY">Robbery</option>
+                                    <option value="THEFT">Theft</option>
+                                    <option value="VEHICLE THEFT">Vehicle Theft</option>
+                                    <option value="BURGLARY">Burglary</option>
+                                    <option value="CHEATING">Cheating</option>
+                                    <option value="NARCOTICS (NDPS)">Narcotics (NDPS)</option>
+                                    <option value="CYBERCRIME">Cybercrime</option>
+                                    <option value="ROAD ACCIDENT">Road Accident</option>
+                                    <option value="MISSING PERSON">Missing Person</option>
+                                    <option value="RIOTING">Rioting</option>
+                                </select>
                             </div>
-                            <div class="coord-box">
-                                <span class="coord-label">Longitude</span>
-                                <span id="lng-display" class="coord-val">--</span>
+                            
+                            <div class="form-group">
+                                <label for="description">Description <span class="optional">(Optional)</span></label>
+                                <textarea id="description" rows="2" placeholder="Provide extra details..."></textarea>
                             </div>
-                        </div>
 
-                        <input type="hidden" id="lat-input" required>
-                        <input type="hidden" id="lng-input" required>
+                            <div class="coordinates">
+                                <div class="coord-box">
+                                    <span class="coord-label">Latitude</span>
+                                    <span id="lat-display" class="coord-val">--</span>
+                                </div>
+                                <div class="coord-box">
+                                    <span class="coord-label">Longitude</span>
+                                    <span id="lng-display" class="coord-val">--</span>
+                                </div>
+                            </div>
+                            
+                            <input type="hidden" id="lat-input" required>
+                            <input type="hidden" id="lng-input" required>
 
-                        <button type="submit" class="submit-btn" id="submit-btn" disabled>
-                            <span>Submit Report</span>
-                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24"
-                                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
-                                stroke-linejoin="round">
-                                <line x1="22" y1="2" x2="11" y2="13"></line>
-                                <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                            </svg>
-                        </button>
-                    </form>
-                    <div id="status-message"></div>
+                            <button type="submit" class="submit-btn" id="submit-btn" disabled>
+                                <span>Submit Report</span>
+                            </button>
+                        </form>
+                        <div id="status-message"></div>
+                    </div>
+
                 </div>
             </div>
         </main>
+
+        <!-- Modal for Detailed Area Analysis -->
+        <div id="details-modal" class="modal-overlay hidden">
+            <div class="modal-content glass-panel">
+                <header class="modal-header">
+                    <h2>Area Analysis Details</h2>
+                    <button class="close-btn" id="close-modal">&times;</button>
+                </header>
+                <div class="modal-body">
+                    <div class="scan-summary" id="modal-summary">
+                        <!-- Summary injected by JS -->
+                    </div>
+                    <div id="modal-incidents-list" class="incidents-list">
+                        <!-- Incident cards injected by JS -->
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <!-- Scripts -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <!-- Leaflet Heatmap Plugin -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
-    <script src="/static/js/app.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
-
 </html>
