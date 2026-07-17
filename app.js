@@ -13,8 +13,28 @@ let markerSelection = null;
 let scanCircle = null;
 let heatLayer = null;
 let markersLayer = L.layerGroup().addTo(map);
+let isStaticMode = false;
 
 let currentMode = 'history'; // 'history' or 'report'
+
+// Haversine formula for static mode distance calculations
+function haversine(lat1, lon1, lat2, lon2) {
+    const R = 6371.0; // Earth radius in km
+    const dlat = (lat2 - lat1) * Math.PI / 180;
+    const dlon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dlat / 2) ** 2 + 
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+              Math.sin(dlon / 2) ** 2;
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+}
+
+// Get all reports (combining embedded dataset + local additions)
+function getLocalReports() {
+    const localAdditions = JSON.parse(localStorage.getItem('added_reports') || '[]');
+    const dataset = (typeof CRIME_DATA !== 'undefined') ? CRIME_DATA : [];
+    return [...localAdditions, ...dataset];
+}
 
 // Listeners for Tabs
 document.getElementById('tab-history').addEventListener('click', () => setMode('history'));
@@ -31,7 +51,7 @@ function setMode(mode) {
     if (scanCircle) map.removeLayer(scanCircle);
     if (markerSelection) map.removeLayer(markerSelection);
     document.getElementById('incidents-list').innerHTML = '';
-    document.getElementById('scan-status').textContent = 'Waiting for selection...';
+    document.getElementById('scan-status').innerHTML = '<span class="scan-icon">📍</span><span>Waiting for selection...</span>';
     document.getElementById('scan-status').className = 'scan-status';
 }
 
@@ -72,31 +92,70 @@ async function fetchNearbyCrimes(lat, lng) {
     const statusEl = document.getElementById('scan-status');
     const listEl = document.getElementById('incidents-list');
     
-    statusEl.textContent = "Scanning area...";
+    statusEl.innerHTML = '<span class="scan-icon">⚡</span><span>Scanning area...</span>';
     statusEl.className = "scan-status";
     listEl.innerHTML = "";
 
+    // 1. Try static fallback if marked or if running on file protocol/github pages
+    if (isStaticMode || window.location.protocol === 'file:' || window.location.hostname.includes('github.io')) {
+        const allReports = getLocalReports();
+        const nearby = [];
+        allReports.forEach(report => {
+            const distance = haversine(lat, lng, report.lat, report.lng);
+            if (distance <= 0.5) { // 500 meters
+                nearby.push({
+                    ...report,
+                    distance_km: distance
+                });
+            }
+        });
+        nearby.sort((a, b) => a.distance_km - b.distance_km);
+        renderNearbyResults(nearby, lat, lng);
+        return;
+    }
+
+    // 2. Local Flask API approach
     try {
         const response = await fetch(`/api/reports/nearby?lat=${lat}&lng=${lng}&radius=0.5`);
+        if (!response.ok) throw new Error('API down');
         const data = await response.json();
-        
-        // Show the results in the modal
-        showModal(data, lat, lng);
-
-        if (data.length > 0) {
-            statusEl.textContent = `Warning: ${data.length} incidents found within 500m.`;
-            statusEl.className = "scan-status found";
-            
-            data.forEach(report => {
-                const domNode = createIncidentCard(report);
-                listEl.appendChild(domNode);
-            });
-        } else {
-            statusEl.textContent = "No reported incidents found in this 500m area.";
-            statusEl.className = "scan-status empty";
-        }
+        renderNearbyResults(data, lat, lng);
     } catch (error) {
-        statusEl.textContent = "Error scanning area.";
+        // Soft fallback to static calculations on error
+        isStaticMode = true;
+        const allReports = getLocalReports();
+        const nearby = [];
+        allReports.forEach(report => {
+            const distance = haversine(lat, lng, report.lat, report.lng);
+            if (distance <= 0.5) {
+                nearby.push({
+                    ...report,
+                    distance_km: distance
+                });
+            }
+        });
+        nearby.sort((a, b) => a.distance_km - b.distance_km);
+        renderNearbyResults(nearby, lat, lng);
+    }
+}
+
+function renderNearbyResults(data, lat, lng) {
+    const statusEl = document.getElementById('scan-status');
+    const listEl = document.getElementById('incidents-list');
+    
+    showModal(data, lat, lng);
+
+    if (data.length > 0) {
+        statusEl.innerHTML = `<span class="scan-icon">⚠️</span><span>Warning: ${data.length} incidents found within 500m.</span>`;
+        statusEl.className = "scan-status found";
+        
+        data.forEach(report => {
+            const domNode = createIncidentCard(report);
+            listEl.appendChild(domNode);
+        });
+    } else {
+        statusEl.innerHTML = '<span class="scan-icon">🛡️</span><span>No reported incidents found in this 500m area.</span>';
+        statusEl.className = "scan-status empty";
     }
 }
 
@@ -109,7 +168,7 @@ function createIncidentCard(report) {
             <span class="incident-dist">${(report.distance_km * 1000).toFixed(0)}m</span>
         </div>
         <span class="incident-date">${report.report_time}</span>
-        <p class="incident-desc">${report.description}</p>
+        <p class="incident-desc">${report.description || 'No description provided.'}</p>
     `;
     return domNode;
 }
@@ -148,29 +207,44 @@ window.addEventListener('click', (e) => {
 
 // Load Global Hotspots (The Heatmap)
 async function loadHotspots() {
+    // 1. Try static fallback if offline/github pages
+    if (isStaticMode || window.location.protocol === 'file:' || window.location.hostname.includes('github.io')) {
+        renderHotspots(getLocalReports());
+        return;
+    }
+
+    // 2. Fetch from Python Server
     try {
         const response = await fetch('/api/reports');
+        if (!response.ok) throw new Error('API down');
         const data = await response.json();
-        
-        if (heatLayer) map.removeLayer(heatLayer);
-        markersLayer.clearLayers();
-        if (data.length === 0) return;
+        renderHotspots(data);
+    } catch (error) {
+        isStaticMode = true;
+        renderHotspots(getLocalReports());
+    }
+}
 
-        const heatData = data.map(r => [r.lat, r.lng, 1]); 
-        heatLayer = L.heatLayer(heatData, {
-            radius: 25, blur: 15, maxZoom: 15,
-            gradient: { 0.2: '#3b82f6', 0.4: '#10b981', 0.6: '#eab308', 0.8: '#f97316', 1.0: '#ef4444' }
-        }).addTo(map);
+function renderHotspots(data) {
+    if (heatLayer) map.removeLayer(heatLayer);
+    markersLayer.clearLayers();
+    if (data.length === 0) return;
 
-        data.forEach(report => {
-            const circle = L.circleMarker([report.lat, report.lng], {
-                radius: 4, fillColor: "#ef4444", color: "transparent", weight: 0, fillOpacity: 0.6
-            });
-            circle.bindPopup(`<strong>${report.crime_type}</strong><br><span style="font-size:0.8rem">${report.report_time}</span>`);
-            markersLayer.addLayer(circle);
+    const heatData = data.map(r => [r.lat, r.lng, 1]); 
+    heatLayer = L.heatLayer(heatData, {
+        radius: 25, blur: 15, maxZoom: 15,
+        gradient: { 0.2: '#3b82f6', 0.4: '#10b981', 0.6: '#eab308', 0.8: '#f97316', 1.0: '#ef4444' }
+    }).addTo(map);
+
+    updateStats(data);
+
+    data.forEach(report => {
+        const circle = L.circleMarker([report.lat, report.lng], {
+            radius: 4, fillColor: "#ef4444", color: "transparent", weight: 0, fillOpacity: 0.6
         });
-
-    } catch (error) { console.error(error); }
+        circle.bindPopup(`<strong>${report.crime_type}</strong><br><span style="font-size:0.8rem">${report.report_time}</span>`);
+        markersLayer.addLayer(circle);
+    });
 }
 
 // Submit via Form
@@ -179,15 +253,34 @@ document.getElementById('report-form').addEventListener('submit', async (e) => {
     const submitBtn = document.getElementById('submit-btn');
     submitBtn.disabled = true;
 
+    const newReport = {
+        crime_type: document.getElementById('crime-type').value,
+        description: document.getElementById('description').value,
+        lat: parseFloat(document.getElementById('lat-input').value),
+        lng: parseFloat(document.getElementById('lng-input').value)
+    };
+
+    // 1. Static fallback execution
+    if (isStaticMode || window.location.protocol === 'file:' || window.location.hostname.includes('github.io')) {
+        const localAdditions = JSON.parse(localStorage.getItem('added_reports') || '[]');
+        newReport.id = Date.now();
+        newReport.report_time = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        localAdditions.unshift(newReport);
+        localStorage.setItem('added_reports', JSON.stringify(localAdditions));
+
+        document.getElementById('report-form').reset();
+        document.getElementById('status-message').innerHTML = '<span class="status-success">Report submitted locally!</span>';
+        loadHotspots();
+        setTimeout(() => document.getElementById('status-message').innerHTML='', 3000);
+        submitBtn.disabled = false;
+        return;
+    }
+
+    // 2. Python backend execution
     try {
         const response = await fetch('/api/reports', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                crime_type: document.getElementById('crime-type').value,
-                description: document.getElementById('description').value,
-                lat: parseFloat(document.getElementById('lat-input').value),
-                lng: parseFloat(document.getElementById('lng-input').value)
-            })
+            body: JSON.stringify(newReport)
         });
 
         if (response.ok) {
@@ -195,6 +288,8 @@ document.getElementById('report-form').addEventListener('submit', async (e) => {
             document.getElementById('status-message').innerHTML = '<span class="status-success">Report submitted!</span>';
             loadHotspots();
             setTimeout(() => document.getElementById('status-message').innerHTML='', 3000);
+        } else {
+            throw new Error('Server error');
         }
     } catch (error) {
         document.getElementById('status-message').innerHTML = '<span class="status-error">Submission failed.</span>';
@@ -202,6 +297,17 @@ document.getElementById('report-form').addEventListener('submit', async (e) => {
         submitBtn.disabled = false;
     }
 });
+
+// Update header stats bar
+function updateStats(data) {
+    const totalEl = document.getElementById('total-count');
+    const zoneEl  = document.getElementById('zone-count');
+    if (!totalEl || !zoneEl) return;
+    totalEl.textContent = data.length;
+    // Count distinct ~1km grid cells as "active zones"
+    const zones = new Set(data.map(r => `${Math.round(r.lat*100)/100},${Math.round(r.lng*100)/100}`));
+    zoneEl.textContent = zones.size;
+}
 
 // Boot up Map Data
 loadHotspots();
